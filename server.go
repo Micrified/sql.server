@@ -62,6 +62,7 @@ func onGetStatic(w http.ResponseWriter, hTable, cTable string, query url.Values)
     buffer.Write(body)
   }
 
+  w.Header().Set("Content-Type", "application/json")
   w.WriteHeader(status)
   w.Write(buffer.Bytes())
   log.Printf("Static page request (id=\"%s\"): %d bytes\n",
@@ -96,6 +97,7 @@ func onGetPage (w http.ResponseWriter, rTable, cTable string, query url.Values) 
     }
   }
   
+  w.Header().Set("Content-Type", "application/json")
   w.WriteHeader(status)
   w.Write(buffer.Bytes())
   log.Printf("Indexed page request (id=\"%s\"): %d bytes\n", 
@@ -125,9 +127,65 @@ func onPostPage (w http.ResponseWriter, rTable, cTable string, r *http.Request) 
     json.NewEncoder(&buffer).Encode(&page)
   }
 
+  w.Header().Set("Content-Type", "application/json")
   w.WriteHeader(status)
   w.Write(buffer.Bytes())
   log.Printf("Page post request (): %d bytes\n", buffer.Len())
+}
+
+func onPutPage(w http.ResponseWriter, rTable, cTable string, r *http.Request) {
+  status, buffer, form := http.StatusOK, bytes.Buffer{}, driver.Page{}
+  var page = driver.Page{}
+
+  // Unmarshal the JSON encoded content
+  body, err := ioutil.ReadAll(r.Body)
+  if nil == err {
+    err = json.Unmarshal(body, &form)
+  }
+  if nil == err {
+    page, err = D.UpdateIndexedPage(rTable, cTable, form)
+  } else {
+    status = http.StatusNotFound
+    buffer.WriteString("Failed resource request: " + err.Error())
+  }
+
+  if nil != err {
+    status = http.StatusNotFound
+    buffer.WriteString("Failed resource request: " + err.Error())
+  } else {
+    json.NewEncoder(&buffer).Encode(&page)
+  }
+
+  w.Header().Set("Content-Type", "application/json")
+  w.WriteHeader(status)
+  w.Write(buffer.Bytes())
+  log.Printf("Page put request(): %d bytes\n", buffer.Len())
+}
+
+func onDeletePage(w http.ResponseWriter, rTable, cTable string, r *http.Request) {
+  status, buffer, form := http.StatusOK, bytes.Buffer{}, driver.Page{}
+
+  // Unmarshal the JSON encoded content
+  body, err := ioutil.ReadAll(r.Body)
+  if nil == err {
+    err = json.Unmarshal(body, &form)
+  }
+  if nil == err {
+    err = D.DeleteIndexedPage(rTable, cTable, form)
+  } else {
+    status = http.StatusNotFound
+    buffer.WriteString("Failed resource request: " + err.Error())
+  }
+
+  if nil != err {
+    status = http.StatusBadRequest
+    buffer.WriteString("Failed resource request: " + err.Error())
+  }
+
+  w.Header().Set("Content-Type", "text/plain")
+  w.WriteHeader(status)
+  w.Write(buffer.Bytes())
+  log.Printf("Page delete request(): %d bytes\n", buffer.Len())
 }
 
 // handleStatic handles HTTP requests to any kind of static page
@@ -140,13 +198,16 @@ func handleStatic (w http.ResponseWriter, r *http.Request) {
 
 // handleBlogs: HTTP handler for requests to the /blogs subdomain
 func handleBlogs(w http.ResponseWriter, r *http.Request) {
-  if http.MethodGet == r.Method {
+  switch r.Method {
+  case http.MethodGet:
     onGetPage(w, "blog_pages", "page_content", r.URL.Query())
-  }
-  if http.MethodPost == r.Method {
+  case http.MethodPost:
     onPostPage(w, "blog_pages", "page_content", r)
+  case http.MethodPut:
+    onPutPage(w, "blog_pages", "page_content", r)
+  case http.MethodDelete:
+    onDeletePage(w, "blog_pages", "page_content", r)
   }
-  // TODO: Handle MethodPost, MethodPut, MethodDelete, etc.
 }
 
 // handlePastes: HTTP handler for requests to the /pastes subdomain
@@ -167,11 +228,12 @@ func main() {
   }
 
   // Initialize database driver
-  err = D.Init(C.Database.UnixSocket, C.Database.Username, 
+  dsn, err := D.Init(C.Database.UnixSocket, C.Database.Username, 
     C.Database.Password, C.Database.Database)
   if nil != err {
     log.Fatal(err.Error())
   } else {
+    log.Printf("Connected (DSN = \"%s\")\n", dsn)
     defer D.Stop()
   }
 
