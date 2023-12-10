@@ -8,7 +8,7 @@ import (
   "log"
   "micrified/sql.driver"
   "net/http"
-  "net/url"
+  //"net/url"
   "os"
 )
 
@@ -22,7 +22,7 @@ var D driver.Driver
 // Global server Configuration
 var C Config
 
-// Server configuration
+// Defines: Server configuration
 type Config struct {
   Database struct {
     UnixSocket string
@@ -32,6 +32,19 @@ type Config struct {
   }
   Host         string
   Port         string
+}
+
+type Table struct {
+  recordTable string
+  contentTable string
+}
+
+func (t *Table) RecordTable() string {
+  return t.recordTable
+}
+
+func (t *Table) ContentTable() string {
+  return t.contentTable
 }
 
 // Configuration parses the given file into a Config structure
@@ -48,13 +61,14 @@ func configuration (filepath string) (Config, error) {
   return c, err
 }
 
-// onGetStatic handles a GET request for static pages. It draws from
-// a hash table (hTable) for page lookup, and a content table (cTable)
-// for page data
-func onGetStatic(w http.ResponseWriter, hTable, cTable string, query url.Values) {
-  status, buffer, id := http.StatusOK, bytes.Buffer{}, query.Get(queryID)
-  body, err := D.StaticPage(cTable, hTable, id)
+// onGetStatic handles a GET request for static pages
+// w: ResponseWriter structure
+// r: Pointer to request structure
+// z: Database tables structure
+func onGetStatic(w http.ResponseWriter, r *http.Request, z driver.Tables) {
+  status, buffer := http.StatusOK, bytes.Buffer{}
   
+  body, err := driver.StaticPage(&D, r.URL.Query().Get(queryID), z)
   if nil != err {
     status = http.StatusBadRequest
     buffer.WriteString("Failed resource request: " + err.Error())
@@ -65,56 +79,65 @@ func onGetStatic(w http.ResponseWriter, hTable, cTable string, query url.Values)
   w.Header().Set("Content-Type", "application/json")
   w.WriteHeader(status)
   w.Write(buffer.Bytes())
-  log.Printf("Static page request (id=\"%s\"): %d bytes\n",
-    id, buffer.Len())
+  log.Printf("GET (static): %d bytes\n", buffer.Len())
 }
 
-// onGetPage handles a GET request for paged content. It draws from 
-// a record table (rTable) for page lists, and a content table (cTable)
-// for page data
-func onGetPage (w http.ResponseWriter, rTable, cTable string, query url.Values) {
-  status, buffer, id := http.StatusOK, bytes.Buffer{}, query.Get(queryID)
-  
-  // Case: Request for paged content list
-  if len(id) == 0 {
-    pages, err := D.IndexedPages(rTable, cTable)
-    if nil != err {
-      status = http.StatusBadRequest
-      buffer.WriteString("Failed resource request: " + err.Error())
-    } else {
-      json.NewEncoder(&buffer).Encode(&pages)
-    }
-
-  // Case: Request for specific page
+// onGet handles a GET request for a single SQLType T
+// w: ResponseWriter structure
+// r: Pointer to request structure
+// z: Database tables structure
+// p: Template type configured with criteria
+func onGet [T driver.SQLType[T], P interface{*T;driver.Queryable}] (w http.ResponseWriter, r *http.Request, z driver.Tables, p P) {
+  status, buffer := http.StatusOK, bytes.Buffer{}
+  item, err := driver.Row[T,P](&D, p, z)
+  if nil != err {
+    status = http.StatusBadRequest
+    buffer.WriteString("Failed resource request: " + err.Error())
   } else {
-    // TODO: Handle invalid query ID
-    page, err := D.IndexedPage(rTable, cTable, id)
-    if nil != err {
-      status = http.StatusBadRequest
-      buffer.WriteString("Failed resource request: " + err.Error())
-    } else {
-      json.NewEncoder(&buffer).Encode(&page)
-    }
+    json.NewEncoder(&buffer).Encode(&item)
   }
-  
   w.Header().Set("Content-Type", "application/json")
   w.WriteHeader(status)
   w.Write(buffer.Bytes())
-  log.Printf("Indexed page request (id=\"%s\"): %d bytes\n", 
-    id, buffer.Len())
+  log.Printf("GET: %d bytes\n", buffer.Len())
 }
 
-func onPostPage (w http.ResponseWriter, rTable, cTable string, r *http.Request) {
-  status, buffer, form := http.StatusOK, bytes.Buffer{}, driver.Page{}
-  var page = driver.Page{}
+// onGetList handles a GET request for all SQLType T
+// w: ResponseWriter structure
+// r: Pointer to request structure
+// z: Database tables structure
+// p: Template type (unused)
+func onGetList [T driver.SQLType[T], P interface{*T;driver.Queryable}] (w http.ResponseWriter, r *http.Request, z driver.Tables, p P) {
+  status, buffer := http.StatusOK, bytes.Buffer{}
+  list, err := driver.Rows[T,P](&D, p, z)
+  if nil != err {
+    status = http.StatusBadRequest
+    buffer.WriteString("Failed resource request: " + err.Error())
+  } else {
+    json.NewEncoder(&buffer).Encode(&list)
+  }
+  w.Header().Set("Content-Type", "application/json")
+  w.WriteHeader(status)
+  w.Write(buffer.Bytes())
+  log.Printf("GET (List): %d bytes\n", buffer.Len())
+}
+
+// onPost handles a POST request for an SQLType T
+// w: ResponseWriter structure
+// r: Pointer to request structure
+// z: Database tables structure
+// p: Template type containing SQL data to be entered
+func onPost [T driver.SQLType[T], P interface{*T;driver.Queryable}] (w http.ResponseWriter, r *http.Request, z driver.Tables, p P) {
+  status, buffer := http.StatusOK, bytes.Buffer{}
+  var item T
 
   // Unmarshal the JSON encoded content
   body, err := ioutil.ReadAll(r.Body)
   if nil == err {
-    err = json.Unmarshal(body, &form)
+    err = json.Unmarshal(body, p)
   }
   if nil == err {
-    page, err = D.InsertIndexedPage(rTable, cTable, form)
+    item, err = driver.Insert[T,P](&D, p, z)
   } else {
     status = http.StatusBadRequest
     buffer.WriteString("Failed resource request: " + err.Error())
@@ -124,26 +147,31 @@ func onPostPage (w http.ResponseWriter, rTable, cTable string, r *http.Request) 
     status = http.StatusBadRequest
     buffer.WriteString("Failed resource request: " + err.Error())
   } else {
-    json.NewEncoder(&buffer).Encode(&page)
+    json.NewEncoder(&buffer).Encode(&item)
   }
 
   w.Header().Set("Content-Type", "application/json")
   w.WriteHeader(status)
   w.Write(buffer.Bytes())
-  log.Printf("Page post request (): %d bytes\n", buffer.Len())
+  log.Printf("POST: %d bytes\n", buffer.Len())
 }
 
-func onPutPage(w http.ResponseWriter, rTable, cTable string, r *http.Request) {
-  status, buffer, form := http.StatusOK, bytes.Buffer{}, driver.Page{}
-  var page = driver.Page{}
+// onPut handles a PUT request for an SQLType T
+// w: ResponseWriter structure
+// r: Pointer to request structure
+// z: Database tables structure
+// p: Template type containing SQL data to be updated
+func onPut [T driver.SQLType[T], P interface{*T;driver.Queryable}] (w http.ResponseWriter, r *http.Request, z driver.Tables, p P) {
+  status, buffer := http.StatusOK, bytes.Buffer{}
+  var item T
 
   // Unmarshal the JSON encoded content
   body, err := ioutil.ReadAll(r.Body)
   if nil == err {
-    err = json.Unmarshal(body, &form)
+    err = json.Unmarshal(body, p)
   }
   if nil == err {
-    page, err = D.UpdateIndexedPage(rTable, cTable, form)
+    item, err = driver.Update[T,P](&D, p, z)
   } else {
     status = http.StatusNotFound
     buffer.WriteString("Failed resource request: " + err.Error())
@@ -153,30 +181,34 @@ func onPutPage(w http.ResponseWriter, rTable, cTable string, r *http.Request) {
     status = http.StatusNotFound
     buffer.WriteString("Failed resource request: " + err.Error())
   } else {
-    json.NewEncoder(&buffer).Encode(&page)
+    json.NewEncoder(&buffer).Encode(&item)
   }
 
   w.Header().Set("Content-Type", "application/json")
   w.WriteHeader(status)
   w.Write(buffer.Bytes())
-  log.Printf("Page put request(): %d bytes\n", buffer.Len())
+  log.Printf("PUT: %d bytes\n", buffer.Len())
 }
 
-func onDeletePage(w http.ResponseWriter, rTable, cTable string, r *http.Request) {
-  status, buffer, form := http.StatusOK, bytes.Buffer{}, driver.Page{}
+// onDelete handles a DELETE request for an SQLType T
+// w: ResponseWriter structure
+// r: Pointer to request structure
+// z: Database tables structure
+// p: Template type containing SQL data to be deleted
+func onDelete [T driver.SQLType[T], P interface{*T;driver.Queryable}] (w http.ResponseWriter, r *http.Request, z driver.Tables, p P) {
+  status, buffer := http.StatusOK, bytes.Buffer{}
 
   // Unmarshal the JSON encoded content
   body, err := ioutil.ReadAll(r.Body)
   if nil == err {
-    err = json.Unmarshal(body, &form)
+    err = json.Unmarshal(body, p)
   }
   if nil == err {
-    err = D.DeleteIndexedPage(rTable, cTable, form)
+    err = driver.Delete[T,P](&D,p,z)
   } else {
     status = http.StatusNotFound
     buffer.WriteString("Failed resource request: " + err.Error())
   }
-
   if nil != err {
     status = http.StatusBadRequest
     buffer.WriteString("Failed resource request: " + err.Error())
@@ -185,34 +217,59 @@ func onDeletePage(w http.ResponseWriter, rTable, cTable string, r *http.Request)
   w.Header().Set("Content-Type", "text/plain")
   w.WriteHeader(status)
   w.Write(buffer.Bytes())
-  log.Printf("Page delete request(): %d bytes\n", buffer.Len())
+  log.Printf("DELETE: %d bytes\n", buffer.Len())
 }
 
 // handleStatic handles HTTP requests to any kind of static page
 func handleStatic (w http.ResponseWriter, r *http.Request) {
+  z := Table{recordTable: "static_pages", contentTable: "page_content"}
   if http.MethodGet == r.Method {
-    onGetStatic(w, "static_pages", "page_content", r.URL.Query())
+    onGetStatic(w, r, &z)
   }
   // TODO: Handle MethodPost, MethodPut, etc.
 }
 
 // handleBlogs: HTTP handler for requests to the /blogs subdomain
 func handleBlogs(w http.ResponseWriter, r *http.Request) {
+  z := &Table{recordTable: "blog_pages", contentTable: "page_content"}
+  page, query := driver.Page{}, r.URL.Query()
   switch r.Method {
   case http.MethodGet:
-    onGetPage(w, "blog_pages", "page_content", r.URL.Query())
+    page.ID = query.Get(queryID)
+    if len(page.ID) > 0 {
+      onGet[driver.Page](w, r, z, &page)
+    } else {
+      onGetList[driver.Page](w, r, z, &page)
+    }
   case http.MethodPost:
-    onPostPage(w, "blog_pages", "page_content", r)
+    onPost[driver.Page](w, r, z, &page)
   case http.MethodPut:
-    onPutPage(w, "blog_pages", "page_content", r)
+    onPut[driver.Page](w, r, z, &page)
   case http.MethodDelete:
-    onDeletePage(w, "blog_pages", "page_content", r)
+    onDelete[driver.Page](w, r, z, &page)
   }
 }
 
 // handlePastes: HTTP handler for requests to the /pastes subdomain
-// func handlePastes (w http.ResponseWriter, r *http.Request) {
-// }
+func handlePastes (w http.ResponseWriter, r *http.Request) {
+  z := &Table{recordTable: "paste_pages", contentTable: "page_content"}
+  paste, query := driver.Paste{}, r.URL.Query()
+  switch r.Method {
+  case http.MethodGet:
+    paste.ID = query.Get(queryID)
+    if len(paste.ID) > 0 {
+      onGet[driver.Paste](w, r, z, &paste)
+    } else {
+      onGetList[driver.Paste](w, r, z, &paste)
+    }
+  case http.MethodPost:
+    onPost[driver.Paste](w, r, z, &paste)
+  case http.MethodPut:
+    onPut[driver.Paste](w, r, z, &paste)
+  case http.MethodDelete:
+    onDelete[driver.Paste](w, r, z, &paste)
+  }
+}
 
 func main() {
   var err error
@@ -244,7 +301,7 @@ func main() {
   http.HandleFunc("/blogs", handleBlogs)
 
   // Register handler: /pastes
-  //http.HandleFunc("/pastes", handlePastes)
+  http.HandleFunc("/pastes", handlePastes)
 
   // Listen and serve
   addr := fmt.Sprintf("%s:%s", C.Host, C.Port)
