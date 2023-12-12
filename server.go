@@ -305,5 +305,6 @@ func main() {
 
   // Listen and serve
   addr := fmt.Sprintf("%s:%s", C.Host, C.Port)
+  fmt.Printf("Listening at: %s\n", addr)
   log.Fatal(http.ListenAndServe(addr, nil))
 }
