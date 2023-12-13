@@ -8,8 +8,8 @@ import (
   "log"
   "micrified/sql.driver"
   "net/http"
-  //"net/url"
   "os"
+  //"net/url"
 )
 
 // Usage describes how to use the program
