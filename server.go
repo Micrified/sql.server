@@ -6,6 +6,7 @@ import (
   "fmt"
   "io/ioutil"
   "log"
+  "micrified/sql.auth"
   "micrified/sql.driver"
   "net/http"
   "os"
@@ -19,8 +20,11 @@ const queryID       = "id"
 // Global driver handle
 var D driver.Driver
 
-// Global server Configuration
+// Global server configuration
 var C Config
+
+// Global session manager
+var S auth.SessionManager
 
 // Defines: Server configuration
 type Config struct {
@@ -59,6 +63,21 @@ func configuration (filepath string) (Config, error) {
   parser := json.NewDecoder(f)
   err = parser.Decode(&c)
   return c, err
+}
+
+// Authentication 
+
+// onPostLogin handles a POST request for authorization 
+func onPostLogin(w http.ResponseWriter, r *http.Request, z driver.Tables) {
+  status, buffer := http.StatusOK, bytes.Buffer{}
+
+  // Receive login. Verify hash. Return SID
+  body, err := driver.User
+
+  w.Header.Set("Content-Type", "application/json")
+  w.WriteHeader(status)
+  w.Write(buffer.Bytes())
+  log.Printf("LOGIN: %d bytes\n", buffer.Len())
 }
 
 // onGetStatic handles a GET request for static pages
@@ -220,6 +239,14 @@ func onDelete [T driver.SQLType[T], P interface{*T;driver.Queryable}] (w http.Re
   log.Printf("DELETE: %d bytes\n", buffer.Len())
 }
 
+// handleLogin handles HTTP requests to the login interface
+func handleLogin (w http.ResponseWriter, r *http.Request) {
+  z := Table{recordTable: "users", contentTable: "credentials"}
+  if http.MethodPost == r.Method {
+    onPostLogin(w, r, &z)
+  }
+}
+
 // handleStatic handles HTTP requests to any kind of static page
 func handleStatic (w http.ResponseWriter, r *http.Request) {
   z := Table{recordTable: "static_pages", contentTable: "page_content"}
@@ -293,6 +320,12 @@ func main() {
     log.Printf("Connected (DSN = \"%s\")\n", dsn)
     defer D.Stop()
   }
+
+  // Initialize session handling
+  S = auth.CreateSessionManager[string](1 * time.Hour)
+
+  // Register handler: /login
+  http.HandleFunc("/login", handleLogin)
 
   // Register handler: /pages
   http.HandleFunc("/static", handleStatic)
